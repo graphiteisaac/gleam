@@ -42,6 +42,7 @@ pub fn command(paths: &ProjectPaths, replace: bool, i_am_sure: bool) -> Result<(
         dependencies,
     } = do_build_hex_tarball(paths, &mut config)?;
 
+    check_for_default_main(&compile_result)?;
     check_for_name_squatting(&compile_result)?;
     check_for_multiple_top_level_modules(&compile_result, i_am_sure)?;
 
@@ -267,6 +268,46 @@ core team.\n",
     let should_publish = cli::confirm_with_text("I am part of the Gleam core team")?;
     println!();
     Ok(should_publish)
+}
+
+// Make sure nobody is publishing a blank package that does nothing
+fn check_for_default_main(package: &Package) -> Result<(), Error> {
+    if package.modules.len() > 1 {
+        return Ok(());
+    }
+
+    let package_name = &package.config.name;
+
+    // Find the top-level module for the package, if we don't
+    // have one, that's fine, return that it is okay.
+    let Some(main_module) = package
+        .modules
+        .iter()
+        .find(|module| module.name == *package_name && !module.name.contains('/'))
+    else {
+        return Ok(());
+    };
+
+    // Find the main function, if we don't have one, that's fine
+    let Some(main_function) = main_module
+        .ast
+        .definitions
+        .iter()
+        .find_map(|def| def.main_function())
+    else {
+        return Ok(());
+    };
+
+    // Check if it's exactly one println statement with the default template
+    if main_function.body.len() == 1
+        && main_function.body.first().is_println()
+        && main_module
+            .code
+            .contains(&format!("Hello from {}", package_name))
+    {
+        return Err(Error::CannotPublishBlankPackage);
+    }
+    Ok(())
 }
 
 struct Tarball {
